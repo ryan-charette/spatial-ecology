@@ -1,0 +1,2 @@
+trial,seed,steps,rows,cols,final_prey,final_predators,final_vegetation,prey_extinct,predator_extinct,time_to_prey_extinction,time_to_predator_extinction,mean_prey,mean_predators,mean_vegetation,migration_rate,drought_probability,disease_probability,fragmentation_rate,predation_rate,stability_score,recovery_time_after_drought,scenario
+0,42,4,2,2,409.700000,75.170000,2282.500000,false,false,,,404.960000,77.726000,2140.580000,0.020000,0.020000,0.010000,0.100000,0.00100000,0.992000,,example
