@@ -1,0 +1,10 @@
+/target/
+/.cargo/
+/.rustup/
+rustup-init.exe
+*.log
+__pycache__/
+.ipynb_checkpoints/
+/results/migration_sweep.csv
+/results/fragmentation_sweep.csv
+/results/drought_scenario.csv

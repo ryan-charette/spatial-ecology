@@ -1,0 +1,9 @@
+[package]
+name = "spatial-ecology-rs"
+version = "0.1.0"
+edition = "2021"
+authors = ["Spatial Ecology RS contributors"]
+description = "Computational ecology model for stochastic spatial trophic dynamics"
+license = "MIT"
+
+[dependencies]
