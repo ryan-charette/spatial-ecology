@@ -1,0 +1,61 @@
+[project]
+scenario_name = "drought_connectivity_phase_space"
+
+[simulation]
+steps = 160
+seed = 42
+trials = 8
+rows = 6
+cols = 6
+
+[initial_conditions]
+prey = 70.0
+predators = 28.0
+vegetation = 350.0
+rainfall = 1.0
+temperature = 20.0
+disease_pressure = 0.0
+
+[biology]
+vegetation_growth_rate = 0.025
+vegetation_grazing_rate = 0.04
+prey_birth_rate = 0.025
+prey_death_rate = 0.015
+predation_rate = 0.0018
+predator_conversion_efficiency = 0.11
+predator_death_rate = 0.025
+carrying_capacity = 700.0
+optimal_temperature = 20.0
+temperature_tolerance = 18.0
+
+[migration]
+prey_migration_rate = 0.02
+predator_migration_rate = 0.01
+fragmentation_rate = 0.10
+scarcity_threshold = 0.25
+scarcity_migration_multiplier = 1.5
+
+[environment]
+drought_probability = 0.02
+drought_vegetation_loss = 0.45
+disease_probability = 0.015
+disease_prey_mortality = 0.20
+temperature_anomaly_probability = 0.005
+temperature_anomaly_width = 6.0
+baseline_temperature = 20.0
+habitat_disturbance_probability = 0.002
+habitat_disturbance_loss = 0.20
+
+[thresholds]
+prey_extinction_threshold = 100.0
+predator_extinction_threshold = 15.0
+
+[sweep]
+migration_rates = [0.0, 0.01, 0.03, 0.06, 0.10]
+drought_probabilities = [0.0, 0.010, 0.015, 0.020, 0.030]
+fragmentation_rates = [0.35]
+predation_rates = [0.0018]
+
+[output]
+results_csv = "results/migration_sweep.csv"
+summary_csv = "results/sweep_summary.csv"

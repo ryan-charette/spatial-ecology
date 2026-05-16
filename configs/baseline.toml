@@ -1,0 +1,55 @@
+[project]
+scenario_name = "reference_landscape"
+
+[simulation]
+steps = 200
+seed = 42
+trials = 10
+rows = 8
+cols = 8
+
+[initial_conditions]
+prey = 100.0
+predators = 20.0
+vegetation = 500.0
+rainfall = 1.0
+temperature = 20.0
+disease_pressure = 0.0
+
+[biology]
+vegetation_growth_rate = 0.05
+vegetation_grazing_rate = 0.03
+prey_birth_rate = 0.04
+prey_death_rate = 0.01
+predation_rate = 0.001
+predator_conversion_efficiency = 0.10
+predator_death_rate = 0.02
+carrying_capacity = 1000.0
+optimal_temperature = 20.0
+temperature_tolerance = 18.0
+
+[migration]
+prey_migration_rate = 0.02
+predator_migration_rate = 0.01
+fragmentation_rate = 0.10
+scarcity_threshold = 0.25
+scarcity_migration_multiplier = 1.5
+
+[environment]
+drought_probability = 0.02
+drought_vegetation_loss = 0.25
+disease_probability = 0.01
+disease_prey_mortality = 0.15
+temperature_anomaly_probability = 0.005
+temperature_anomaly_width = 6.0
+baseline_temperature = 20.0
+habitat_disturbance_probability = 0.002
+habitat_disturbance_loss = 0.20
+
+[thresholds]
+prey_extinction_threshold = 1.0
+predator_extinction_threshold = 1.0
+
+[output]
+results_csv = "results/baseline.csv"
+summary_csv = "results/summary.csv"
