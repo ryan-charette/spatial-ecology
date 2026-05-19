@@ -8,6 +8,12 @@ trials = 10
 rows = 8
 cols = 8
 
+[execution]
+mode = "serial"
+workers = 1
+benchmark = false
+validate = true
+
 [initial_conditions]
 prey = 100.0
 predators = 20.0
@@ -53,3 +59,6 @@ predator_extinction_threshold = 1.0
 [output]
 results_csv = "results/baseline.csv"
 summary_csv = "results/summary.csv"
+timestep_metrics_csv = "results/timestep_metrics.csv"
+worker_metrics_csv = "results/worker_metrics.csv"
+benchmark_csv = "results/benchmarks/scaling.csv"
