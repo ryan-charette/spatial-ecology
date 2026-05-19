@@ -1,8 +1,8 @@
-# Spatial Ecology RS
+# Parallel Spatial Ecosystem Dynamics
 
-Computational ecology model for studying stochastic trophic dynamics across spatially connected habitat patches. The model represents coupled prey, predator, and vegetation state variables on a two-dimensional landscape, with dispersal, habitat fragmentation, drought, disease, and Monte Carlo parameter sweeps.
+Rust-based parallel scientific simulation engine for studying stochastic trophic dynamics across spatially connected habitat patches. The project combines computational ecology with high-performance systems concepts: spatial domain decomposition, worker-thread execution, explicit migration-event routing, deterministic timestep barriers, and benchmark instrumentation.
 
-The repository is organized as a reproducible simulation study: model equations are documented, scenario parameters are encoded in TOML files, stochastic runs are seeded, and outputs are written as analysis-ready CSV files with Python visualization scripts.
+The repository is organized as a reproducible simulation study and systems benchmark: model equations are documented, scenario parameters are encoded in TOML files, stochastic runs are seeded, serial and parallel modes are comparable under fixed seeds, and outputs are written as analysis-ready CSV files with Python visualization scripts.
 
 ![Population time series](figures/population_timeseries.png)
 
@@ -29,18 +29,46 @@ At each timestep the engine applies local biological updates, conservative migra
 
 The full model specification is in [docs/model_description.md](docs/model_description.md).
 
+## Parallel Execution Model
+
+Habitat patches are partitioned across workers using deterministic contiguous domain decomposition. Each worker owns local patch state for a timestep, applies local ecological updates, and emits `MigrationEvent` records for prey and predator dispersal. A coordinator collects worker messages through Rust channels, sorts and validates events, applies migration deltas, records metrics, and advances the global timestep only after all workers complete the barrier.
+
+```text
+                    Coordinator
+                         |
+        -------------------------------------
+        |                 |                 |
+     Worker 0          Worker 1          Worker 2
+   patch block A     patch block B     patch block C
+        |                 |                 |
+        -------- migration event routing ----
+```
+
+The execution strategy is separate from the ecological model. The same patch dynamics, climate events, and migration rules run in both modes:
+
+```bash
+cargo run --release -- --config configs/baseline.toml --mode serial --seed 42
+cargo run --release -- --config configs/baseline.toml --mode parallel --workers 4 --seed 42 --validate
+```
+
+Parallel reproducibility is enforced with per-patch deterministic RNG streams derived from `(seed, trial, timestep, patch_id)`, so changing `--workers` does not change ecological results for deterministic validation scenarios.
+
 ## Reproducible Execution
 
 ```bash
 cargo build --release
 cargo test
 cargo run --release -- --config configs/baseline.toml --trials 10 --seed 42
+cargo run --release -- --config configs/scaling.toml --mode parallel --workers 4 --benchmark --validate
 ```
 
 The reference scenario writes:
 
 - `results/baseline.csv`: patch-level state by trial and timestep.
 - `results/summary.csv`: one summary row per trial.
+- `results/timestep_metrics.csv`: barrier-phase and event metrics by timestep.
+- `results/worker_metrics.csv`: worker-local timing and event counts.
+- `results/benchmarks/scaling.csv`: benchmark runtime, speedup, and efficiency records.
 
 ## Experimental Design
 
@@ -86,10 +114,22 @@ trial,seed,steps,rows,cols,final_prey,final_predators,final_vegetation,
 prey_extinct,predator_extinct,time_to_prey_extinction,time_to_predator_extinction,
 mean_prey,mean_predators,mean_vegetation,migration_rate,drought_probability,
 disease_probability,fragmentation_rate,predation_rate,stability_score,
-recovery_time_after_drought,scenario
+recovery_time_after_drought,scenario,execution_mode,workers,total_runtime_ms,
+mean_timestep_ms,total_events,cross_worker_events,total_edges,local_edges,
+boundary_edges,boundary_edge_fraction,patches_per_second,events_per_second
 ```
 
 The summary table is designed for estimating extinction probabilities, mean time-to-threshold, and comparative sensitivity across parameter settings.
+
+Systems outputs:
+
+```text
+results/timestep_metrics.csv
+results/worker_metrics.csv
+results/benchmarks/scaling.csv
+```
+
+The ecological summary includes compact systems fields such as execution mode, workers, runtime, event counts, boundary-edge fraction, and patches per second. Detailed runtime metrics remain in separate CSVs.
 
 ## Visualization
 
@@ -98,6 +138,8 @@ python analysis/plot_population_timeseries.py results/baseline.csv figures/popul
 cargo run --release -- --config configs/migration_sweep.toml
 python analysis/plot_extinction_heatmap.py results/sweep_summary.csv figures/extinction_risk_heatmap.png
 python analysis/plot_spatial_snapshots.py results/baseline.csv figures/spatial_population_map.png
+cargo run --release -- --config configs/scaling.toml --mode parallel --workers 4 --benchmark --validate
+python analysis/plot_scaling.py results/benchmarks/scaling.csv figures
 ```
 
 The plotting scripts use Matplotlib when available and fall back to a labeled Pillow renderer when Matplotlib is not installed.
@@ -110,7 +152,10 @@ The plotting scripts use Matplotlib when available and fall back to a labeled Pi
 src/
   main.rs          CLI entry point
   config.rs        scenario and sweep configuration parser
-  simulation.rs    timestep engine and spatial migration
+  simulation.rs    model initialization and deterministic RNG helpers
+  parallel.rs      coordinator-driven timestep barrier
+  partition.rs     spatial domain decomposition and boundary metrics
+  worker.rs        worker-local patch updates and migration events
   patch.rs         habitat patch state representation
   species.rs       trophic update equations
   climate.rs       stochastic environmental disturbance
@@ -124,16 +169,17 @@ results/           generated CSV artifacts
 figures/           generated figures
 ```
 
+## Technical Highlights
+
+- Spatial domain decomposition across Rust worker threads.
+- Message-passing worker/coordinator execution with deterministic timestep barriers.
+- Explicit migration events for cross-partition prey and predator dispersal.
+- Patch ownership, event validity, migration conservation, and population-bound validation.
+- Serial/parallel equivalence tests under fixed seeds.
+- Benchmark CSV and scaling plots for speedup, efficiency, throughput, and communication pressure.
+
 ## Reproducibility Notes
 
 All stochastic processes are seeded. For a fixed configuration, trial count, and base seed, the model produces deterministic CSV output. Trial seeds are derived from the base seed, scenario index, and trial index.
 
 The model is intentionally synthetic: parameters are selected to demonstrate computational experimentation with spatial ecological dynamics, not to calibrate a specific empirical ecosystem.
-
-## Extensions
-
-- Estimate confidence intervals for extinction probabilities.
-- Add weighted empirical connectivity networks.
-- Compare patch-dynamics outcomes with reaction-diffusion approximations.
-- Parallelize Monte Carlo execution.
-- Calibrate parameters against field or remote-sensing datasets.
