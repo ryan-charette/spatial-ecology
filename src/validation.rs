@@ -1,6 +1,8 @@
 use std::fmt;
 
+use crate::partition::PartitionMap;
 use crate::patch::{Patch, PatchId};
+use crate::worker::MigrationEvent;
 
 #[derive(Clone, Debug)]
 pub enum ValidationError {
@@ -26,6 +28,15 @@ pub enum ValidationError {
     PatchCountChanged {
         expected: usize,
         actual: usize,
+    },
+    PatchOwnershipMissing {
+        patch_id: PatchId,
+    },
+    PatchOwnershipDuplicated {
+        patch_id: PatchId,
+    },
+    InvalidMigrationEvent {
+        reason: String,
     },
 }
 
@@ -63,6 +74,19 @@ impl fmt::Display for ValidationError {
             ),
             Self::PatchCountChanged { expected, actual } => {
                 write!(formatter, "patch count changed from {expected} to {actual}")
+            }
+            Self::PatchOwnershipMissing { patch_id } => {
+                write!(formatter, "patch {} has no partition owner", patch_id.0)
+            }
+            Self::PatchOwnershipDuplicated { patch_id } => {
+                write!(
+                    formatter,
+                    "patch {} is owned by multiple partitions",
+                    patch_id.0
+                )
+            }
+            Self::InvalidMigrationEvent { reason } => {
+                write!(formatter, "invalid migration event: {reason}")
             }
         }
     }
@@ -126,6 +150,84 @@ pub fn validate_migration(
     Ok(())
 }
 
+pub fn validate_partition_map(partition_map: &PartitionMap) -> Result<(), ValidationError> {
+    let mut seen = vec![false; partition_map.patch_count()];
+
+    for partition in partition_map.partitions() {
+        for patch_id in &partition.patch_ids {
+            let owner =
+                partition_map
+                    .owner(*patch_id)
+                    .ok_or(ValidationError::PatchOwnershipMissing {
+                        patch_id: *patch_id,
+                    })?;
+
+            if owner != partition.id {
+                return Err(ValidationError::PatchOwnershipMissing {
+                    patch_id: *patch_id,
+                });
+            }
+
+            if seen[patch_id.0] {
+                return Err(ValidationError::PatchOwnershipDuplicated {
+                    patch_id: *patch_id,
+                });
+            }
+            seen[patch_id.0] = true;
+        }
+    }
+
+    for (patch_id, found) in seen.into_iter().enumerate() {
+        if !found {
+            return Err(ValidationError::PatchOwnershipMissing {
+                patch_id: PatchId(patch_id),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+pub fn validate_migration_events(
+    events: &[MigrationEvent],
+    expected_timestep: usize,
+    patch_count: usize,
+) -> Result<(), ValidationError> {
+    for event in events {
+        if event.timestep != expected_timestep {
+            return Err(ValidationError::InvalidMigrationEvent {
+                reason: format!(
+                    "expected timestep {}, got {}",
+                    expected_timestep, event.timestep
+                ),
+            });
+        }
+
+        if event.source_patch.0 >= patch_count {
+            return Err(ValidationError::InvalidMigrationEvent {
+                reason: format!("source patch {} is out of range", event.source_patch.0),
+            });
+        }
+
+        if event.destination_patch.0 >= patch_count {
+            return Err(ValidationError::InvalidMigrationEvent {
+                reason: format!(
+                    "destination patch {} is out of range",
+                    event.destination_patch.0
+                ),
+            });
+        }
+
+        if !event.amount.is_finite() || event.amount < -1.0e-12 {
+            return Err(ValidationError::InvalidMigrationEvent {
+                reason: format!("event amount {} is not a valid migrant count", event.amount),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 fn validate_value(
     patch: &Patch,
     variable: &'static str,
@@ -147,4 +249,31 @@ fn validate_value(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_migration_events, validate_partition_map};
+    use crate::partition::PartitionMap;
+    use crate::patch::PatchId;
+    use crate::worker::{MigratingSpecies, MigrationEvent};
+
+    #[test]
+    fn validates_partition_ownership() {
+        let map = PartitionMap::contiguous(9, 4);
+        validate_partition_map(&map).expect("partition map should be valid");
+    }
+
+    #[test]
+    fn rejects_future_migration_event() {
+        let event = MigrationEvent {
+            timestep: 3,
+            source_patch: PatchId(0),
+            destination_patch: PatchId(1),
+            species: MigratingSpecies::Prey,
+            amount: 1.0,
+        };
+
+        assert!(validate_migration_events(&[event], 2, 4).is_err());
+    }
 }
