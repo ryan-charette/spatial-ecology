@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "spatial-ecology-rs"
+name = "parallel-spatial-ecosystems"
 version = "0.1.0"
