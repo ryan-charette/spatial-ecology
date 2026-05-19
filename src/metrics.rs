@@ -1,4 +1,4 @@
-use crate::config::SimulationConfig;
+use crate::config::{ExecutionMode, SimulationConfig};
 use crate::patch::Patch;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -45,6 +45,80 @@ pub struct SimulationSummary {
     pub predation_rate: f64,
     pub stability_score: f64,
     pub recovery_time_after_drought: Option<usize>,
+    pub systems: SystemsSummary,
+}
+
+#[derive(Clone, Debug)]
+pub struct SystemsSummary {
+    pub mode: ExecutionMode,
+    pub workers: usize,
+    pub total_runtime_ms: f64,
+    pub mean_timestep_ms: f64,
+    pub total_events: usize,
+    pub cross_worker_events: usize,
+    pub total_edges: usize,
+    pub local_edges: usize,
+    pub boundary_edges: usize,
+    pub boundary_edge_fraction: f64,
+    pub patches_per_second: f64,
+    pub events_per_second: f64,
+}
+
+#[derive(Clone, Debug)]
+pub struct TimestepMetricsRecord {
+    pub scenario: String,
+    pub trial: usize,
+    pub timestep: usize,
+    pub mode: ExecutionMode,
+    pub workers: usize,
+    pub patches: usize,
+    pub total_events: usize,
+    pub cross_worker_events: usize,
+    pub timestep_ms: f64,
+    pub worker_compute_ms: f64,
+    pub event_exchange_ms: f64,
+    pub migration_apply_ms: f64,
+    pub environment_ms: f64,
+    pub metrics_aggregation_ms: f64,
+    pub validation_ms: f64,
+    pub total_prey: f64,
+    pub total_predators: f64,
+    pub total_vegetation: f64,
+}
+
+#[derive(Clone, Debug)]
+pub struct WorkerMetricsRecord {
+    pub scenario: String,
+    pub trial: usize,
+    pub timestep: usize,
+    pub worker_id: usize,
+    pub owned_patches: usize,
+    pub outgoing_events: usize,
+    pub incoming_events: usize,
+    pub local_update_ms: f64,
+    pub event_generation_ms: f64,
+    pub mean_prey: f64,
+    pub mean_predators: f64,
+    pub mean_vegetation: f64,
+}
+
+impl Default for SystemsSummary {
+    fn default() -> Self {
+        Self {
+            mode: ExecutionMode::Serial,
+            workers: 1,
+            total_runtime_ms: 0.0,
+            mean_timestep_ms: 0.0,
+            total_events: 0,
+            cross_worker_events: 0,
+            total_edges: 0,
+            local_edges: 0,
+            boundary_edges: 0,
+            boundary_edge_fraction: 0.0,
+            patches_per_second: 0.0,
+            events_per_second: 0.0,
+        }
+    }
 }
 
 impl MetricsRecorder {
@@ -127,6 +201,7 @@ impl MetricsRecorder {
             predation_rate: config.biology.predation_rate,
             stability_score,
             recovery_time_after_drought: None,
+            systems: SystemsSummary::default(),
         }
     }
 }
