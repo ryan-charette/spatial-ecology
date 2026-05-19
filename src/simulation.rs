@@ -1,179 +1,8 @@
-use crate::climate::apply_environment as apply_environmental_events;
 use crate::config::SimulationConfig;
-use crate::event::{event_label, SmallRng};
-use crate::metrics::{totals_for_patches, MetricsRecorder, SimulationSummary};
-use crate::output::OutputWriters;
+use crate::event::SmallRng;
 use crate::patch::{Patch, PatchState};
-use crate::species::update_patch_state;
-use crate::validation::{validate_migration, validate_patches};
 
-pub struct Simulation {
-    config: SimulationConfig,
-    scenario: String,
-    trial: usize,
-    seed: u64,
-    patches: Vec<Patch>,
-    connectivity: Vec<Vec<(usize, f64)>>,
-    rng: SmallRng,
-    metrics: MetricsRecorder,
-}
-
-impl Simulation {
-    pub fn new(config: SimulationConfig, scenario: String, trial: usize, seed: u64) -> Self {
-        let mut rng = SmallRng::new(seed);
-        let patches = initialize_patches(&config);
-        let connectivity = initialize_connectivity(&config, &mut rng);
-
-        Self {
-            config,
-            scenario,
-            trial,
-            seed,
-            patches,
-            connectivity,
-            rng,
-            metrics: MetricsRecorder::new(),
-        }
-    }
-
-    pub fn run(&mut self, output: &mut OutputWriters) -> Result<SimulationSummary, String> {
-        let patch_count = self.patches.len();
-        self.metrics.observe(0, &self.patches, &self.config);
-        self.write_timestep(output, 0, &vec![String::from("initial"); patch_count])?;
-
-        for timestep in 1..=self.config.simulation.steps {
-            self.step(timestep)?;
-            let events = self.apply_environment();
-            validate_patches(
-                &self.patches,
-                self.config.simulation.rows * self.config.simulation.cols,
-                self.config.biology.carrying_capacity,
-            )
-            .map_err(|error| error.to_string())?;
-            self.metrics.observe(timestep, &self.patches, &self.config);
-            self.write_timestep(output, timestep, &events)?;
-        }
-
-        Ok(self
-            .metrics
-            .finish(self.scenario.clone(), self.trial, self.seed, &self.config))
-    }
-
-    fn step(&mut self, _timestep: usize) -> Result<(), String> {
-        for patch in &mut self.patches {
-            update_patch_state(&mut patch.state, &self.config.biology);
-        }
-
-        self.apply_migration()?;
-
-        validate_patches(
-            &self.patches,
-            self.config.simulation.rows * self.config.simulation.cols,
-            self.config.biology.carrying_capacity,
-        )
-        .map_err(|error| error.to_string())
-    }
-
-    fn apply_migration(&mut self) -> Result<(), String> {
-        let before = totals_for_patches(&self.patches);
-        let mut prey_delta = vec![0.0; self.patches.len()];
-        let mut predator_delta = vec![0.0; self.patches.len()];
-
-        for (from, edges) in self.connectivity.iter().enumerate() {
-            if edges.is_empty() {
-                continue;
-            }
-
-            let state = &self.patches[from].state;
-            let total_weight = edges.iter().map(|(_, weight)| *weight).sum::<f64>();
-            if total_weight <= 0.0 {
-                continue;
-            }
-
-            let forage_ratio = state.vegetation / state.carrying_capacity.max(1.0);
-            let prey_rate = adjusted_migration_rate(
-                self.config.migration.prey_migration_rate,
-                forage_ratio,
-                self.config.migration.scarcity_threshold,
-                self.config.migration.scarcity_migration_multiplier,
-            );
-            let predator_food_ratio = if state.predators <= f64::EPSILON {
-                1.0
-            } else {
-                state.prey / (state.predators * 5.0).max(1.0)
-            };
-            let predator_rate = adjusted_migration_rate(
-                self.config.migration.predator_migration_rate,
-                predator_food_ratio,
-                self.config.migration.scarcity_threshold,
-                self.config.migration.scarcity_migration_multiplier,
-            );
-
-            let prey_migrants = state.prey * prey_rate;
-            let predator_migrants = state.predators * predator_rate;
-            prey_delta[from] -= prey_migrants;
-            predator_delta[from] -= predator_migrants;
-
-            for (to, weight) in edges {
-                let share = *weight / total_weight;
-                prey_delta[*to] += prey_migrants * share;
-                predator_delta[*to] += predator_migrants * share;
-            }
-        }
-
-        for (index, patch) in self.patches.iter_mut().enumerate() {
-            patch.state.prey += prey_delta[index];
-            patch.state.predators += predator_delta[index];
-            patch.state.clamp_nonnegative();
-        }
-
-        let after = totals_for_patches(&self.patches);
-        validate_migration(
-            before.prey,
-            after.prey,
-            before.predators,
-            after.predators,
-            1.0e-6,
-        )
-        .map_err(|error| error.to_string())
-    }
-
-    fn apply_environment(&mut self) -> Vec<String> {
-        self.patches
-            .iter_mut()
-            .map(|patch| {
-                let events = apply_environmental_events(
-                    &mut patch.state,
-                    &self.config.environment,
-                    &mut self.rng,
-                );
-                event_label(&events)
-            })
-            .collect()
-    }
-
-    fn write_timestep(
-        &self,
-        output: &mut OutputWriters,
-        timestep: usize,
-        events: &[String],
-    ) -> Result<(), String> {
-        for (patch, event) in self.patches.iter().zip(events.iter()) {
-            output.write_patch_record(
-                &self.scenario,
-                self.trial,
-                self.seed,
-                timestep,
-                patch,
-                event,
-            )?;
-        }
-
-        Ok(())
-    }
-}
-
-fn initialize_patches(config: &SimulationConfig) -> Vec<Patch> {
+pub fn initialize_patches(config: &SimulationConfig) -> Vec<Patch> {
     let mut patches = Vec::with_capacity(config.simulation.rows * config.simulation.cols);
 
     for row in 0..config.simulation.rows {
@@ -195,24 +24,34 @@ fn initialize_patches(config: &SimulationConfig) -> Vec<Patch> {
     patches
 }
 
-fn initialize_connectivity(
-    config: &SimulationConfig,
-    rng: &mut SmallRng,
-) -> Vec<Vec<(usize, f64)>> {
+pub fn initialize_connectivity(config: &SimulationConfig, seed: u64) -> Vec<Vec<(usize, f64)>> {
     let rows = config.simulation.rows;
     let cols = config.simulation.cols;
     let mut connectivity = vec![Vec::new(); rows * cols];
+    let mut rng = SmallRng::new(seed ^ 0x9e37_79b9_7f4a_7c15);
 
     for row in 0..rows {
         for col in 0..cols {
             let from = row * cols + col;
 
             if col + 1 < cols {
-                add_edge_if_connected(from, row * cols + col + 1, &mut connectivity, config, rng);
+                add_edge_if_connected(
+                    from,
+                    row * cols + col + 1,
+                    &mut connectivity,
+                    config,
+                    &mut rng,
+                );
             }
 
             if row + 1 < rows {
-                add_edge_if_connected(from, (row + 1) * cols + col, &mut connectivity, config, rng);
+                add_edge_if_connected(
+                    from,
+                    (row + 1) * cols + col,
+                    &mut connectivity,
+                    config,
+                    &mut rng,
+                );
             }
         }
     }
@@ -235,7 +74,7 @@ fn add_edge_if_connected(
     connectivity[b].push((a, 1.0));
 }
 
-fn adjusted_migration_rate(
+pub fn adjusted_migration_rate(
     base_rate: f64,
     resource_ratio: f64,
     threshold: f64,
@@ -249,27 +88,64 @@ fn adjusted_migration_rate(
     rate.clamp(0.0, 0.95)
 }
 
+pub fn deterministic_patch_rng(
+    seed: u64,
+    trial: usize,
+    timestep: usize,
+    patch_id: usize,
+) -> SmallRng {
+    SmallRng::new(
+        seed ^ mix_u64(trial as u64).rotate_left(13)
+            ^ mix_u64(timestep as u64).rotate_left(29)
+            ^ mix_u64(patch_id as u64).rotate_left(43),
+    )
+}
+
+fn mix_u64(mut value: u64) -> u64 {
+    value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Simulation;
+    use super::{deterministic_patch_rng, initialize_connectivity, initialize_patches};
     use crate::config::SimulationConfig;
-    use crate::metrics::totals_for_patches;
 
     #[test]
-    fn migration_conserves_animals() {
+    fn initialization_creates_expected_patch_grid() {
         let mut config = SimulationConfig::default();
         config.simulation.rows = 2;
-        config.simulation.cols = 2;
+        config.simulation.cols = 3;
+
+        let patches = initialize_patches(&config);
+
+        assert_eq!(patches.len(), 6);
+        assert_eq!(patches[5].coord.row, 1);
+        assert_eq!(patches[5].coord.col, 2);
+    }
+
+    #[test]
+    fn connectivity_is_seed_reproducible() {
+        let mut config = SimulationConfig::default();
+        config.simulation.rows = 3;
+        config.simulation.cols = 3;
         config.migration.fragmentation_rate = 0.0;
-        config.environment.drought_probability = 0.0;
-        config.environment.disease_probability = 0.0;
 
-        let mut simulation = Simulation::new(config, String::from("test"), 0, 7);
-        let before = totals_for_patches(&simulation.patches);
-        simulation.apply_migration().expect("migration should pass");
-        let after = totals_for_patches(&simulation.patches);
+        let first = initialize_connectivity(&config, 10);
+        let second = initialize_connectivity(&config, 10);
 
-        assert!((before.prey - after.prey).abs() < 1.0e-9);
-        assert!((before.predators - after.predators).abs() < 1.0e-9);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn patch_rng_is_independent_by_patch_and_timestep() {
+        let mut a = deterministic_patch_rng(42, 0, 1, 5);
+        let mut b = deterministic_patch_rng(42, 0, 1, 5);
+        let mut c = deterministic_patch_rng(42, 0, 2, 5);
+
+        assert_eq!(a.next_f64(), b.next_f64());
+        assert_ne!(a.next_f64(), c.next_f64());
     }
 }
