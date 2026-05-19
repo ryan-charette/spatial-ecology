@@ -1,9 +1,11 @@
 use std::fs;
+use std::path::Path;
 
 #[derive(Clone, Debug)]
 pub struct SimulationConfig {
     pub scenario_name: String,
     pub simulation: SimulationSection,
+    pub execution: ExecutionConfig,
     pub initial_conditions: InitialConditions,
     pub biology: BiologyConfig,
     pub migration: MigrationConfig,
@@ -20,6 +22,37 @@ pub struct SimulationSection {
     pub trials: usize,
     pub rows: usize,
     pub cols: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct ExecutionConfig {
+    pub mode: ExecutionMode,
+    pub workers: usize,
+    pub benchmark: bool,
+    pub validate: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct RuntimeOptions {
+    pub mode: ExecutionMode,
+    pub workers: usize,
+    pub benchmark: bool,
+    pub validate: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExecutionMode {
+    Serial,
+    Parallel,
+}
+
+impl ExecutionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Serial => "serial",
+            Self::Parallel => "parallel",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -78,6 +111,9 @@ pub struct ThresholdConfig {
 pub struct OutputConfig {
     pub results_csv: String,
     pub summary_csv: String,
+    pub timestep_metrics_csv: String,
+    pub worker_metrics_csv: String,
+    pub benchmark_csv: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -93,6 +129,7 @@ impl Default for SimulationConfig {
         Self {
             scenario_name: String::from("baseline"),
             simulation: SimulationSection::default(),
+            execution: ExecutionConfig::default(),
             initial_conditions: InitialConditions::default(),
             biology: BiologyConfig::default(),
             migration: MigrationConfig::default(),
@@ -112,6 +149,17 @@ impl Default for SimulationSection {
             trials: 1,
             rows: 10,
             cols: 10,
+        }
+    }
+}
+
+impl Default for ExecutionConfig {
+    fn default() -> Self {
+        Self {
+            mode: ExecutionMode::Serial,
+            workers: 1,
+            benchmark: false,
+            validate: true,
         }
     }
 }
@@ -188,6 +236,54 @@ impl Default for OutputConfig {
         Self {
             results_csv: String::from("results/baseline.csv"),
             summary_csv: String::from("results/summary.csv"),
+            timestep_metrics_csv: String::from("results/timestep_metrics.csv"),
+            worker_metrics_csv: String::from("results/worker_metrics.csv"),
+            benchmark_csv: String::from("results/benchmarks/scaling.csv"),
+        }
+    }
+}
+
+impl OutputConfig {
+    pub fn with_directory(mut self, target: &str) -> Self {
+        if target.to_ascii_lowercase().ends_with(".csv") {
+            let path = Path::new(target);
+            let base = path
+                .parent()
+                .and_then(|parent| parent.to_str())
+                .filter(|parent| !parent.is_empty())
+                .unwrap_or("results");
+            self.results_csv = target.to_string();
+            self.summary_csv = format!("{base}/summary.csv");
+            self.timestep_metrics_csv = format!("{base}/timestep_metrics.csv");
+            self.worker_metrics_csv = format!("{base}/worker_metrics.csv");
+            self.benchmark_csv = format!("{base}/benchmarks/scaling.csv");
+            return self;
+        }
+
+        let base = target.trim_end_matches(&['/', '\\'][..]);
+        self.results_csv = format!("{base}/baseline.csv");
+        self.summary_csv = format!("{base}/summary.csv");
+        self.timestep_metrics_csv = format!("{base}/timestep_metrics.csv");
+        self.worker_metrics_csv = format!("{base}/worker_metrics.csv");
+        self.benchmark_csv = format!("{base}/benchmarks/scaling.csv");
+        self
+    }
+}
+
+impl RuntimeOptions {
+    pub fn from_config(config: &ExecutionConfig) -> Self {
+        Self {
+            mode: config.mode,
+            workers: config.workers,
+            benchmark: config.benchmark,
+            validate: config.validate,
+        }
+    }
+
+    pub fn effective_workers(&self) -> usize {
+        match self.mode {
+            ExecutionMode::Serial => 1,
+            ExecutionMode::Parallel => self.workers.max(1),
         }
     }
 }
@@ -287,6 +383,10 @@ impl SimulationConfig {
             ("simulation", "trials") => self.simulation.trials = parse_usize(key, value)?,
             ("simulation", "rows") => self.simulation.rows = parse_usize(key, value)?,
             ("simulation", "cols") => self.simulation.cols = parse_usize(key, value)?,
+            ("execution", "mode") => self.execution.mode = parse_execution_mode(value)?,
+            ("execution", "workers") => self.execution.workers = parse_usize(key, value)?,
+            ("execution", "benchmark") => self.execution.benchmark = parse_bool(key, value)?,
+            ("execution", "validate") => self.execution.validate = parse_bool(key, value)?,
             ("initial_conditions", "prey") => self.initial_conditions.prey = parse_f64(key, value)?,
             ("initial_conditions", "predators") => {
                 self.initial_conditions.predators = parse_f64(key, value)?
@@ -377,6 +477,13 @@ impl SimulationConfig {
             }
             ("output", "results_csv") => self.output.results_csv = parse_string(value),
             ("output", "summary_csv") => self.output.summary_csv = parse_string(value),
+            ("output", "timestep_metrics_csv") => {
+                self.output.timestep_metrics_csv = parse_string(value)
+            }
+            ("output", "worker_metrics_csv") => {
+                self.output.worker_metrics_csv = parse_string(value)
+            }
+            ("output", "benchmark_csv") => self.output.benchmark_csv = parse_string(value),
             ("sweep", "migration_rates") => self.sweep.migration_rates = parse_f64_array(value)?,
             ("sweep", "drought_probabilities") => {
                 self.sweep.drought_probabilities = parse_f64_array(value)?
@@ -398,6 +505,10 @@ impl SimulationConfig {
 
         if self.simulation.trials == 0 {
             return Err(String::from("trials must be positive"));
+        }
+
+        if self.execution.workers == 0 {
+            return Err(String::from("workers must be positive"));
         }
 
         if self.biology.carrying_capacity <= 0.0 {
@@ -456,6 +567,22 @@ fn parse_u64(key: &str, value: &str) -> Result<u64, String> {
         .map_err(|_| format!("{key} must be a nonnegative integer"))
 }
 
+pub fn parse_execution_mode(value: &str) -> Result<ExecutionMode, String> {
+    match parse_string(value).to_ascii_lowercase().as_str() {
+        "serial" => Ok(ExecutionMode::Serial),
+        "parallel" => Ok(ExecutionMode::Parallel),
+        other => Err(format!("mode must be serial or parallel, got {other}")),
+    }
+}
+
+fn parse_bool(key: &str, value: &str) -> Result<bool, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(format!("{key} must be true or false")),
+    }
+}
+
 fn parse_f64(key: &str, value: &str) -> Result<f64, String> {
     let parsed = value
         .trim()
@@ -487,7 +614,7 @@ fn parse_f64_array(value: &str) -> Result<Vec<f64>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::SimulationConfig;
+    use super::{ExecutionMode, SimulationConfig};
 
     #[test]
     fn parses_minimal_config() {
@@ -507,6 +634,25 @@ mod tests {
         assert_eq!(config.simulation.steps, 12);
         assert_eq!(config.simulation.rows * config.simulation.cols, 6);
         assert_eq!(config.output.results_csv, "results/test.csv");
+    }
+
+    #[test]
+    fn parses_execution_config() {
+        let config = SimulationConfig::from_toml_str(
+            r#"
+            [execution]
+            mode = "parallel"
+            workers = 4
+            benchmark = true
+            validate = true
+            "#,
+        )
+        .expect("config should parse");
+
+        assert_eq!(config.execution.mode, ExecutionMode::Parallel);
+        assert_eq!(config.execution.workers, 4);
+        assert!(config.execution.benchmark);
+        assert!(config.execution.validate);
     }
 
     #[test]
